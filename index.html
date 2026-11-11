@@ -114,6 +114,7 @@ pre.summary{white-space:pre-wrap;font:14px/1.5 ui-monospace,Menlo,monospace;back
 
 .alert{background:var(--warn-soft);color:var(--warn);border-left:4px solid var(--warn);border-radius:12px;padding:12px 14px;margin:12px 0;font-size:14px}
 .alert b{display:block}
+.alert .ok{display:block;margin-top:10px;border:1px solid currentColor;background:none;color:inherit;font:inherit;font-weight:600;border-radius:999px;padding:6px 14px;cursor:pointer}
 
 nav{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);
   display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:5}
@@ -134,6 +135,7 @@ nav button.flag::after{content:"";position:absolute;top:8px;right:calc(50% - 18p
   <span class="sub" id="subtitle"></span>
 </header>
 <main>
+<div id="safari-alert"></div>
 
 <!-- ============ LOG ============ -->
 <section class="view on" id="v-log">
@@ -254,7 +256,7 @@ nav button.flag::after{content:"";position:absolute;top:8px;right:calc(50% - 18p
 <script>
 (function(){
 "use strict";
-const KEY="reflect.entries.v1", META="reflect.meta.v1";
+const KEY="reflect.entries.v1", META="reflect.meta.v1", DRAFT="reflect.draft.v1";
 
 const METHODS=[
   {id:"joint",ic:"🚬",t:"Joint / pre-roll"},
@@ -330,7 +332,37 @@ function paint(){
   mark("#f-after .mood","v",state.after);
   document.querySelectorAll("#f-feelings .chip").forEach(b=>b.classList.toggle("sel",state.feelings.has(b.dataset.t)));
   document.querySelectorAll("#f-reasons .chip").forEach(b=>b.classList.toggle("sel",state.reasons.has(b.dataset.t)));
+  saveDraft();
 }
+
+/* ---------- draft: keeps an unsaved check-in or edit if she leaves the app ---------- */
+function formData(){
+  return {method:state.method,amount:state.amount,mood:state.mood,after:state.after,company:state.company,
+    feelings:[...state.feelings],reasons:[...state.reasons],editing:state.editing,
+    when:$("#f-when").value,place:$("#f-place").value,notes:$("#f-notes").value,afterNote:$("#f-afternote").value};
+}
+function hasContent(d){
+  return !!(d.editing||d.method||d.amount||d.mood!=null||d.after!=null||d.company||d.feelings.length||d.reasons.length||
+    d.place.trim()||d.notes.trim()||d.afterNote.trim());
+}
+function saveDraft(){
+  try{const d=formData();if(hasContent(d))localStorage.setItem(DRAFT,JSON.stringify(d));else localStorage.removeItem(DRAFT)}catch(e){}
+}
+function readDraft(){try{return JSON.parse(localStorage.getItem(DRAFT))}catch(e){return null}}
+function restoreDraft(d){
+  if(!d||typeof d!=="object")return false;
+  if(d.editing&&!entries.some(x=>x.id===d.editing))d.editing=null;
+  Object.assign(state,{method:d.method??null,amount:d.amount??null,mood:d.mood??null,after:d.after??null,company:d.company??null,editing:d.editing||null});
+  state.feelings=new Set(d.feelings||[]);state.reasons=new Set(d.reasons||[]);
+  if(d.when)$("#f-when").value=d.when;
+  $("#f-place").value=d.place||"";$("#f-notes").value=d.notes||"";$("#f-afternote").value=d.afterNote||"";
+  if(state.editing){$("#save").textContent="Update entry";$("#cancel-edit").style.display="block";$("#title").textContent="Edit entry"}
+  paint();
+  return hasContent(formData());
+}
+$("#v-log").addEventListener("input",saveDraft);
+$("#v-log").addEventListener("change",saveDraft);
+document.addEventListener("visibilitychange",()=>{if(document.hidden)saveDraft()});
 
 function localInput(d){const z=new Date(d.getTime()-d.getTimezoneOffset()*60000);return z.toISOString().slice(0,16)}
 function resetForm(){
@@ -339,6 +371,7 @@ function resetForm(){
   $("#f-when").value=localInput(new Date());
   ["#f-place","#f-notes","#f-afternote"].forEach(s=>$(s).value="");
   $("#save").textContent="Save entry";$("#cancel-edit").style.display="none";
+  if($("#title").textContent==="Edit entry")$("#title").textContent="Check in";
   paint();
 }
 
@@ -575,7 +608,20 @@ $("#nav").onclick=e=>{const b=e.target.closest("button");if(b)go(b.dataset.v)};
 let tt;function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(tt);tt=setTimeout(()=>t.classList.remove("show"),2200)}
 
 $("#subtitle").textContent=new Date().toLocaleDateString([], {weekday:"long",month:"long",day:"numeric"});
+const draft=readDraft();
 resetForm();flagNav();
+if(restoreDraft(draft))toast(state.editing?"Your unsaved edit is still here":"Picked up where you left off");
+
+/* Safari tab vs Home Screen app: iPhone keeps their data separate */
+function renderSafariAlert(){
+  const el=$("#safari-alert");
+  let ok=false;try{ok=sessionStorage.getItem("reflect.safariOk")==="1"}catch(e){}
+  if(navigator.standalone!==false||ok){el.innerHTML="";return}
+  const n=entries.length;
+  el.innerHTML=`<div class="alert"><b>You're in Safari, not the Reflect app</b>Your iPhone keeps entries made in a Safari tab separate from the Reflect icon on your Home Screen${n?` (this Safari tab has ${n} entr${n===1?"y":"ies"})`:""}. To keep everything together, open Reflect from the Home Screen icon. If your entries are here instead, use Save backup on the Share tab, then Restore inside the app.<button type="button" class="ok" id="safari-ok">Got it</button></div>`;
+  $("#safari-ok").onclick=()=>{try{sessionStorage.setItem("reflect.safariOk","1")}catch(e){}el.innerHTML=""};
+}
+renderSafariAlert();
 
 if("serviceWorker" in navigator&&location.protocol==="https:"){navigator.serviceWorker.register("sw.js").catch(()=>{})}
 })();
