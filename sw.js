@@ -1,5 +1,5 @@
 // Caches the app so it opens with no internet. Bump VERSION after changing any file.
-const VERSION = "reflect-v2";
+const VERSION = "reflect-v3";
 const FILES = ["./", "index.html", "manifest.json", "icon-180.png", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

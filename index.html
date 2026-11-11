@@ -77,6 +77,11 @@ input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
 .btn.ghost{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}
 .btn.danger{background:transparent;color:var(--warn);border:1.5px solid var(--warn)}
 .row{display:flex;gap:8px}.row>*{flex:1}
+.nudge{background:var(--accent-soft);border-left:4px solid var(--accent)}
+.nudge h2{color:var(--accent)}
+.nudge .hint{color:var(--ink)}
+.nudge .btn{margin-top:0;padding:12px}
+.lastbk{font-size:14px;margin:0 0 12px}
 
 /* history */
 .entry{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
@@ -139,6 +144,7 @@ nav button.flag::after{content:"";position:absolute;top:8px;right:calc(50% - 18p
 
 <!-- ============ LOG ============ -->
 <section class="view on" id="v-log">
+  <div id="backup-nudge"></div>
   <div class="card">
     <h2>When</h2>
     <input type="datetime-local" id="f-when">
@@ -229,7 +235,9 @@ nav button.flag::after{content:"";position:absolute;top:8px;right:calc(50% - 18p
 
   <div class="card">
     <h2>Backup</h2>
-    <p class="hint">Entries live only on this phone. Save a backup now and then (to Files or iCloud Drive) so nothing is lost if Safari data gets cleared.</p>
+    <p class="hint">Entries live only on this phone. Save a backup each week: tap Save backup, then <b>Save to Files → iCloud Drive</b>. Only you can see it there.</p>
+    <p class="hint"><b>Heads up:</b> deleting the Reflect icon from your Home Screen, or clearing Safari's website data, erases the entries on this phone. A backup is how you get them back.</p>
+    <p class="lastbk" id="last-backup"></p>
     <div class="row">
       <button class="btn ghost" id="x-backup">Save backup</button>
       <button class="btn ghost" id="x-restore">Restore</button>
@@ -389,7 +397,7 @@ $("#save").onclick=()=>{
   };
   if(state.editing){const i=entries.findIndex(x=>x.id===state.editing);if(i>=0)entries[i]=e}else entries.push(e);
   entries.sort((a,b)=>a.when<b.when?1:-1);
-  if(persist()){toast(state.editing?"Entry updated":"Saved — thank you for checking in");resetForm();window.scrollTo(0,0);flagNav()}
+  if(persist()){toast(state.editing?"Entry updated":"Saved — thank you for checking in");resetForm();window.scrollTo(0,0);renderBackupUI()}
 };
 $("#cancel-edit").onclick=()=>{resetForm();go("history")};
 
@@ -551,9 +559,11 @@ $("#x-make").onclick=()=>{
 function download(name,text,type){
   const blob=new Blob([text],{type});
   const file=new File([blob],name,{type});
-  if(navigator.canShare&&navigator.canShare({files:[file]})){navigator.share({files:[file]}).catch(()=>{});return}
+  // Resolves true when the file was handed off, false if she closed the share sheet without saving.
+  if(navigator.canShare&&navigator.canShare({files:[file]}))return navigator.share({files:[file]}).then(()=>true,()=>false);
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000);
+  return Promise.resolve(true);
 }
 const stamp=()=>dateInput(new Date());
 $("#x-csv").onclick=()=>{
@@ -564,10 +574,13 @@ $("#x-csv").onclick=()=>{
     return [dateInput(d),fmtTime(d),mLabel(e.method),aLabel(e.amount),e.mood??"",(e.feelings||[]).join("; "),(e.reasons||[]).join("; "),cLabel(e.company),e.place,e.notes,e.after??"",e.afterNote].map(q).join(",")});
   download(`reflect-${stamp()}.csv`,"﻿"+[head.map(q).join(","),...rows].join("\r\n"),"text/csv");
 };
-$("#x-backup").onclick=()=>{
-  download(`reflect-backup-${stamp()}.json`,JSON.stringify({app:"reflect",version:1,exported:new Date().toISOString(),entries},null,1),"application/json");
-  meta.lastBackup=Date.now();persist();flagNav();renderBackupAlert();
-};
+async function doBackup(){
+  if(!entries.length){toast("No entries to back up yet");return}
+  const ok=await download(`reflect-backup-${stamp()}.json`,JSON.stringify({app:"reflect",version:1,exported:new Date().toISOString(),entries},null,1),"application/json");
+  if(!ok){toast("Backup not saved");return}
+  meta.lastBackup=Date.now();delete meta.backupSnooze;persist();renderBackupUI();toast("Backup saved");
+}
+$("#x-backup").onclick=doBackup;
 $("#x-restore").onclick=()=>$("#x-file").click();
 $("#x-file").onchange=async ev=>{
   const f=ev.target.files[0];if(!f)return;
@@ -575,22 +588,37 @@ $("#x-file").onchange=async ev=>{
     if(!Array.isArray(inc))throw 0;
     const ids=new Set(entries.map(e=>e.id));let added=0;
     inc.forEach(e=>{if(e&&e.id&&e.when&&!ids.has(e.id)){entries.push(e);added++}});
-    entries.sort((a,b)=>a.when<b.when?1:-1);persist();toast(`Restored ${added} entr${added===1?"y":"ies"}`);
+    entries.sort((a,b)=>a.when<b.when?1:-1);persist();renderBackupUI();toast(`Restored ${added} entr${added===1?"y":"ies"}`);
   }catch(e){toast("That file isn't a Reflect backup")}
   ev.target.value="";
 };
 $("#x-wipe").onclick=()=>{
   if(!entries.length){toast("Nothing to erase");return}
   if(confirm(`Erase all ${entries.length} entries from this phone? This can't be undone. Consider saving a backup first.`)&&confirm("Are you sure?")){
-    entries=[];persist();toast("All entries erased");flagNav();renderBackupAlert()}
+    entries=[];persist();toast("All entries erased");renderBackupUI()}
 };
 
-/* backup reminder — only shown when it actually needs attention */
-function backupDue(){return entries.length>=5&&(!meta.lastBackup||Date.now()-meta.lastBackup>30*864e5)}
-function renderBackupAlert(){
-  $("#backup-alert").innerHTML=backupDue()?`<div class="alert"><b>No recent backup</b>${meta.lastBackup?"It's been over a month since your last backup.":"You haven't saved a backup yet."} Entries only exist on this phone — tap “Save backup” below.</div>`:"";
+/* backup reminder: due once there's anything to lose and no backup in the last week */
+const WEEK=7*864e5;
+function backupDue(){return entries.length>0&&(!meta.lastBackup||Date.now()-meta.lastBackup>WEEK)}
+function ago(t){
+  const days=Math.floor((new Date().setHours(0,0,0,0)-new Date(t).setHours(0,0,0,0))/864e5);
+  return days<=0?"today":days===1?"yesterday":`${days} days ago`;
 }
-function flagNav(){document.querySelector('nav [data-v="export"]').classList.toggle("flag",backupDue())}
+function renderBackupUI(){
+  const due=backupDue();
+  document.querySelector('nav [data-v="export"]').classList.toggle("flag",due);
+  $("#backup-alert").innerHTML=due?`<div class="alert"><b>Time for a backup</b>${meta.lastBackup?`Your last backup was ${ago(meta.lastBackup)}.`:"You haven't saved a backup yet."} Entries only exist on this phone — tap “Save backup” below.</div>`:"";
+  $("#last-backup").innerHTML=meta.lastBackup?`Last backup: <b>${ago(meta.lastBackup)}</b>`:entries.length?`Last backup: <b>never</b>`:"";
+  const snoozed=meta.backupSnooze&&Date.now()<meta.backupSnooze;
+  const nudge=$("#backup-nudge");
+  if(!due||snoozed){nudge.innerHTML="";return}
+  nudge.innerHTML=`<div class="card nudge"><h2>${meta.lastBackup?"Time for your weekly backup":"Keep your entries safe"}</h2>
+    <p class="hint">${meta.lastBackup?`Your last backup was ${ago(meta.lastBackup)}.`:"Your entries only live on this phone."} Tap Back up now, then choose <b>Save to Files → iCloud Drive</b>.</p>
+    <div class="row"><button type="button" class="btn" id="nudge-go">Back up now</button><button type="button" class="btn ghost" id="nudge-later">Later</button></div></div>`;
+  $("#nudge-go").onclick=doBackup;
+  $("#nudge-later").onclick=()=>{meta.backupSnooze=Date.now()+2*864e5;persist();renderBackupUI()};
+}
 
 /* ---------- nav ---------- */
 const TITLES={log:"Check in",history:"History",insights:"Patterns",export:"Share & backup"};
@@ -600,7 +628,7 @@ function go(v){
   $("#title").textContent=state.editing&&v==="log"?"Edit entry":TITLES[v];
   if(v==="history")renderHistory();
   if(v==="insights")renderInsights();
-  if(v==="export")renderBackupAlert();
+  if(v==="export")renderBackupUI();
   window.scrollTo(0,0);
 }
 $("#nav").onclick=e=>{const b=e.target.closest("button");if(b)go(b.dataset.v)};
@@ -609,7 +637,7 @@ let tt;function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("sh
 
 $("#subtitle").textContent=new Date().toLocaleDateString([], {weekday:"long",month:"long",day:"numeric"});
 const draft=readDraft();
-resetForm();flagNav();
+resetForm();renderBackupUI();
 if(restoreDraft(draft))toast(state.editing?"Your unsaved edit is still here":"Picked up where you left off");
 
 /* Safari tab vs Home Screen app: iPhone keeps their data separate */
